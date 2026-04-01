@@ -1,4 +1,26 @@
 cmake_minimum_required(VERSION 3.16)
+
+# ---------------------------------------------------------------------------
+# ESP-IDF component mode — detected automatically when building with idf.py.
+# ---------------------------------------------------------------------------
+if(ESP_PLATFORM)
+  idf_component_register(
+    SRCS
+      "src/cynk.c"
+      "src/cynk_protocol.c"
+      "src/platform/mqtt_esp.c"
+      "third_party/jsmn/jsmn.c"
+    INCLUDE_DIRS
+      "include"
+    PRIV_INCLUDE_DIRS
+      "src"
+      "third_party/jsmn"
+    REQUIRES
+      mqtt esp_timer
+  )
+  return()
+endif()
+
 project(cynk_sdk_c LANGUAGES C)
 
 # ---------------------------------------------------------------------------

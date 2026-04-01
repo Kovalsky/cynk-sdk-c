@@ -1,110 +1,164 @@
 # Cynk Device SDK (C)
 
-Small, transport-agnostic C99 SDK for Cynk device firmware.
-
-See `SPEC.md` for the full protocol and API design notes.
-
-## Quick Start
-
-1) Implement MQTT connect/loop in your firmware.
-2) Provide publish/subscribe/time callbacks to the SDK.
-3) Call `cynk_device_on_connect()` after MQTT connects.
-4) Feed incoming MQTT messages into `cynk_device_handle_message()`.
-5) Use `cynk_device_send_value()` to publish telemetry.
-
-## Minimal Integration
+Connect your device to [cynk.tech](https://cynk.tech) in three lines of C:
 
 ```c
-#include "cynk_device.h"
+cynk_device *dev = cynk_connect("my_device", "my_password");
+cynk_send(dev, "temperature", 23.5);
+cynk_disconnect(dev);
+```
 
-static uint64_t now_ms(void *ctx) {
-  /* return monotonic milliseconds */
-}
+Supports **Linux / Mac / Raspberry Pi** (via libmosquitto) and **ESP32** (via esp-mqtt). Same `cynk.h` API on every platform.
 
-static int now_iso8601(void *ctx, char *buf, size_t cap) {
-  /* write ISO8601 UTC timestamp into buf */
-  return 0; /* 0 on success */
-}
+## Quick Start — Desktop (Linux / Mac / RPi)
 
-static int mqtt_publish(void *ctx, const char *topic, const void *payload,
-                        size_t len, int qos, int retain) {
-  /* call your MQTT client */
-  return 0;
-}
+### Prerequisites
 
-static int mqtt_subscribe(void *ctx, const char *topic, int qos) {
-  /* call your MQTT client */
-  return 0;
-}
+```bash
+# Ubuntu / Debian / Raspberry Pi OS
+sudo apt-get install -y libmosquitto-dev cmake
 
-static void on_command(void *ctx, const cynk_command *cmd) {
-  /* handle command */
-}
+# macOS
+brew install mosquitto cmake
+```
 
-void setup_device(void) {
-  cynk_device_config cfg = {
-    .device_id = "device-123",
-    .handshake_timeout_ms = 5000,
-    .qos = 1,
-    .now_ms = now_ms,
-    .now_iso8601 = now_iso8601,
-    .time_ctx = NULL,
-    .alloc = NULL,
-    .free = NULL
-  };
+### Build & Run
 
-  cynk_transport tx = {
-    .publish = mqtt_publish,
-    .subscribe = mqtt_subscribe,
-    .ctx = NULL
-  };
+```bash
+git clone https://github.com/cynktech/cynk-sdk-c.git
+cd cynk-sdk-c
+cmake -B build && cmake --build build
+./build/cynk_quick_start <device_id> <password>
+```
 
-  cynk_device *dev = cynk_device_create(&cfg, &tx);
-  cynk_device_set_command_cb(dev, on_command, NULL);
+Get your `device_id` and `password` from the cynk.tech dashboard (Settings → Devices).
 
-  /* Configure MQTT LWT using the status topic/payload */
-  char lwt_payload[160];
-  cynk_build_status_payload(dev, "offline", lwt_payload, sizeof(lwt_payload));
-  const char *lwt_topic = cynk_device_status_topic(dev);
+### Single-File Build (RPi / no CMake)
 
-  /* Connect MQTT, set LWT to lwt_topic + lwt_payload, then: */
-  cynk_device_on_connect(dev);
-}
+For projects without a build system, use the amalgamated build:
 
-void on_mqtt_message(const char *topic, const void *payload, size_t len) {
-  cynk_device_handle_message(dev, topic, payload, len);
-}
+```bash
+./scripts/amalgamate.sh
+gcc your_app.c dist/cynk_amalgamation.c -lmosquitto -lssl -lcrypto -o your_app
+```
 
-void send_value(cynk_device *dev) {
-  cynk_widget_ref ref = { .slug = "slider-1", .id = NULL };
-  cynk_value value = { .type = CYNK_VALUE_NUMBER, .number = 42.0 };
-  cynk_device_send_value(dev, ref, value);
+This bundles the entire SDK into two files: `dist/cynk.h` and `dist/cynk_amalgamation.c`.
+
+## Quick Start — ESP32
+
+### Prerequisites
+
+- [ESP-IDF v5.x](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/)
+
+### Setup
+
+Clone the SDK into your project's `components/` directory:
+
+```bash
+cd your_project
+git clone https://github.com/cynktech/cynk-sdk-c.git components/cynk-sdk-c
+```
+
+Or add it as a git submodule:
+
+```bash
+git submodule add https://github.com/cynktech/cynk-sdk-c.git components/cynk-sdk-c
+```
+
+The SDK auto-registers as an ESP-IDF component when `ESP_PLATFORM` is detected.
+
+### Example
+
+```c
+#include "cynk.h"
+
+void app_main(void) {
+    /* ... Wi-Fi + SNTP init ... */
+
+    cynk_device *dev = cynk_connect("my_device", "my_password");
+    while (1) {
+        cynk_send(dev, "temperature", read_sensor());
+        cynk_poll(dev, 5000);
+    }
 }
 ```
 
-## Notes
-- The SDK does not validate widget value types; values are sent as-is.
-- `now_ms` and `now_iso8601` are required.
-- `cynk_device_send_raw()` publishes a full telemetry JSON string.
-- Default QoS is 1; retain is always false.
-- If you supply a custom allocator, also supply the matching `free`.
+See [`examples/esp32/`](examples/esp32/) for a complete working example with Wi-Fi and SNTP setup.
+
+### Build & Flash
+
+```bash
+cd examples/esp32
+# Edit main/main.c with your Wi-Fi and device credentials
+idf.py build flash monitor
+```
+
+## API Reference
+
+| Function | Description |
+|---|---|
+| `cynk_connect(device_id, password)` | Connect to cynk.tech. Blocks until handshake completes (~5 s timeout). Returns `NULL` on failure. |
+| `cynk_send(dev, slug, value)` | Send a numeric value to a widget by slug. |
+| `cynk_send_bool(dev, slug, value)` | Send a boolean (0/1) to a widget. |
+| `cynk_send_json(dev, slug, json)` | Send a raw JSON string to a widget. |
+| `cynk_on_command(dev, callback, ctx)` | Register a callback for incoming dashboard commands. |
+| `cynk_poll(dev, timeout_ms)` | Process network events. Call periodically to receive commands. |
+| `cynk_disconnect(dev)` | Disconnect and free all resources. |
+
+All `cynk_send*` functions return `CYNK_OK` (0) on success, negative error code on failure.
+
+## Receiving Commands
+
+```c
+static void on_command(void *ctx, const cynk_command *cmd) {
+    printf("Command: %s, widget: %s\n", cmd->command, cmd->widget.slug);
+}
+
+cynk_on_command(dev, on_command, NULL);
+while (1) {
+    cynk_poll(dev, 1000);  /* dispatch incoming commands */
+}
+```
+
+## Architecture
+
+```
+cynk_connect / cynk_send / cynk_disconnect   ← Public API (cynk.h)
+        │
+   cynk_proto_*                               ← Protocol (handshake, JSON, topics)
+        │
+   cynk_platform_*                            ← Platform interface (abstract)
+        │
+   ┌────┴─────┐
+mqtt_mosquitto  mqtt_esp                      ← Adapters (link-time binding)
+```
+
+The platform adapter is selected at **link time** — exactly one `.c` file is compiled in. The public API is identical across all platforms.
+
+## Protocol-Level API
+
+For advanced use cases (custom MQTT clients, unit testing), the internal protocol API is available:
+
+```c
+#include "internal/cynk_protocol.h"
+```
+
+See [`examples/basic_device.c`](examples/basic_device.c) for a complete protocol-level example.
+
+## Build & Test (Development)
+
+```bash
+cmake -B build && cmake --build build
+ctest --test-dir build
+```
 
 ## Troubleshooting
 
-- Handshake timeout: ensure the backend consumer is running and subscribed to `cynk/v1/status/+`.
-- TLS CA missing: for the dev broker, regenerate `priv/dev_tls/ca.crt` with `./scripts/gen_dev_mqtt_certs.sh` in the main Cynk repo, or use `--tls-insecure` for local tests.
+- **Handshake timeout**: Ensure the backend consumer is running and subscribed to `cynk/v1/status/+`.
+- **Desktop TLS CA missing**: Install `ca-certificates`. For the dev broker, use `./scripts/gen_dev_mqtt_certs.sh` in the main Cynk repo.
+- **ESP32 time not syncing**: SNTP requires a working internet connection. Check Wi-Fi connectivity first.
+- **ESP32 stack overflow**: Increase `CONFIG_ESP_MAIN_TASK_STACK_SIZE` in `menuconfig` (8192 recommended).
 
-## Build
+## Specification
 
-```bash
-cmake -S . -B build
-cmake --build build
-```
-
-## Test
-
-```bash
-cmake -S . -B build
-cmake --build build
-ctest --test-dir build
-```
+See [`SPEC.md`](SPEC.md) for the full MQTT protocol contract, payload shapes, and architecture decisions.
