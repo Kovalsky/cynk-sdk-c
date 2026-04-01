@@ -1,4 +1,4 @@
-#include "cynk_device.h"
+#include "internal/cynk_protocol.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -103,9 +103,9 @@ static void capture_command(void *ctx, const cynk_command *cmd) {
   }
 }
 
-static cynk_device *create_test_device(struct test_transport *tx_ctx,
-                                       struct test_time *time_ctx) {
-  cynk_device_config cfg;
+static cynk_proto *create_test_device(struct test_transport *tx_ctx,
+                                      struct test_time *time_ctx) {
+  cynk_proto_config cfg;
   cynk_transport tx;
 
   memset(&cfg, 0, sizeof(cfg));
@@ -121,13 +121,13 @@ static cynk_device *create_test_device(struct test_transport *tx_ctx,
   tx.subscribe = test_subscribe;
   tx.ctx = tx_ctx;
 
-  return cynk_device_create(&cfg, &tx);
+  return cynk_proto_create(&cfg, &tx);
 }
 
 static void test_handshake_and_send(void) {
   struct test_transport tx_ctx;
   struct test_time time_ctx;
-  cynk_device *dev;
+  cynk_proto *dev;
   int rc;
 
   memset(&tx_ctx, 0, sizeof(tx_ctx));
@@ -136,14 +136,14 @@ static void test_handshake_and_send(void) {
   dev = create_test_device(&tx_ctx, &time_ctx);
   assert(dev != NULL);
 
-  rc = cynk_device_on_connect(dev);
+  rc = cynk_proto_on_connect(dev);
   assert(rc == CYNK_OK);
   assert(tx_ctx.subscribe_count == 2);
-  assert(strcmp(tx_ctx.subscribe_topics[0], cynk_device_status_ack_topic(dev)) == 0);
-  assert(strcmp(tx_ctx.subscribe_topics[1], cynk_device_command_topic_wildcard(dev)) == 0);
+  assert(strcmp(tx_ctx.subscribe_topics[0], cynk_proto_status_ack_topic(dev)) == 0);
+  assert(strcmp(tx_ctx.subscribe_topics[1], cynk_proto_command_topic_wildcard(dev)) == 0);
 
   assert(tx_ctx.publish_count == 1);
-  assert(strcmp(tx_ctx.last_publish_topic, cynk_device_status_topic(dev)) == 0);
+  assert(strcmp(tx_ctx.last_publish_topic, cynk_proto_status_topic(dev)) == 0);
   assert(strstr(tx_ctx.last_publish_payload, "\"status\":\"online\"") != NULL);
 
   const char *ack =
@@ -151,28 +151,28 @@ static void test_handshake_and_send(void) {
     "\"device_id\":\"dev-1\",\"ts\":\"2025-01-01T00:00:00Z\","
     "\"topics\":{\"telemetry\":\"cynk/v1/user-1/dev-1/telemetry\"}}";
 
-  rc = cynk_device_handle_message(dev, cynk_device_status_ack_topic(dev), ack, strlen(ack));
+  rc = cynk_proto_handle_message(dev, cynk_proto_status_ack_topic(dev), ack, strlen(ack));
   assert(rc == CYNK_OK);
-  assert(cynk_device_handshake_ready(dev));
-  assert(strcmp(cynk_device_user_id(dev), "user-1") == 0);
+  assert(cynk_proto_handshake_ready(dev));
+  assert(strcmp(cynk_proto_user_id(dev), "user-1") == 0);
 
   cynk_widget_ref ref = { .id = NULL, .slug = "slider-1" };
   cynk_value value = { .type = CYNK_VALUE_NUMBER, .number = 42.0 };
 
-  rc = cynk_device_send_value(dev, ref, value);
+  rc = cynk_proto_send_value(dev, ref, value);
   assert(rc == CYNK_OK);
   assert(strcmp(tx_ctx.last_publish_topic, "cynk/v1/user-1/dev-1/telemetry") == 0);
   assert(strstr(tx_ctx.last_publish_payload, "\"slug\":\"slider-1\"") != NULL);
   assert(strstr(tx_ctx.last_publish_payload, "\"value\":42") != NULL);
 
-  cynk_device_destroy(dev);
+  cynk_proto_destroy(dev);
 }
 
 static void test_command_callback(void) {
   struct test_transport tx_ctx;
   struct test_time time_ctx;
   struct command_capture cap;
-  cynk_device *dev;
+  cynk_proto *dev;
   int rc;
 
   memset(&tx_ctx, 0, sizeof(tx_ctx));
@@ -182,14 +182,14 @@ static void test_command_callback(void) {
   dev = create_test_device(&tx_ctx, &time_ctx);
   assert(dev != NULL);
 
-  cynk_device_set_command_cb(dev, capture_command, &cap);
+  cynk_proto_set_command_cb(dev, capture_command, &cap);
 
   const char *cmd =
     "{\"command\":\"toggle\",\"request_id\":\"abcd\","
     "\"widget\":{\"slug\":\"relay-1\",\"id\":\"wid-1\"},"
     "\"params\":{\"on\":true}}";
 
-  rc = cynk_device_handle_message(dev, "cynk/v1/user-1/dev-1/command", cmd, strlen(cmd));
+  rc = cynk_proto_handle_message(dev, "cynk/v1/user-1/dev-1/command", cmd, strlen(cmd));
   assert(rc == CYNK_OK);
   assert(cap.called == 1);
   assert(strcmp(cap.command, "toggle") == 0);
@@ -198,13 +198,13 @@ static void test_command_callback(void) {
   assert(strcmp(cap.id, "wid-1") == 0);
   assert(strcmp(cap.params, "{\"on\":true}") == 0);
 
-  cynk_device_destroy(dev);
+  cynk_proto_destroy(dev);
 }
 
 static void test_handshake_timeout(void) {
   struct test_transport tx_ctx;
   struct test_time time_ctx;
-  cynk_device *dev;
+  cynk_proto *dev;
   int rc;
 
   memset(&tx_ctx, 0, sizeof(tx_ctx));
@@ -213,14 +213,14 @@ static void test_handshake_timeout(void) {
   dev = create_test_device(&tx_ctx, &time_ctx);
   assert(dev != NULL);
 
-  rc = cynk_device_on_connect(dev);
+  rc = cynk_proto_on_connect(dev);
   assert(rc == CYNK_OK);
 
   time_ctx.now = 6000;
-  rc = cynk_device_poll(dev);
+  rc = cynk_proto_poll(dev);
   assert(rc == CYNK_ERR_TIMEOUT);
 
-  cynk_device_destroy(dev);
+  cynk_proto_destroy(dev);
 }
 
 int main(void) {

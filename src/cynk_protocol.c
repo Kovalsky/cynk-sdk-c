@@ -1,4 +1,4 @@
-#include "cynk_device.h"
+#include "internal/cynk_protocol.h"
 #include "jsmn.h"
 
 #include <stdarg.h>
@@ -12,8 +12,8 @@
 
 #define CYNK_STATUS_PAYLOAD_MAX 160
 
-struct cynk_device {
-  cynk_device_config cfg;
+struct cynk_proto {
+  cynk_proto_config cfg;
   cynk_transport tx;
   char *device_id;
   char *user_id;
@@ -32,11 +32,11 @@ struct cynk_device {
   void *handshake_ctx;
 };
 
-static void *cynk_alloc(const cynk_device *dev, size_t size) {
+static void *proto_alloc(const cynk_proto *dev, size_t size) {
   return dev->cfg.alloc ? dev->cfg.alloc(size) : malloc(size);
 }
 
-static void cynk_free(const cynk_device *dev, void *ptr) {
+static void proto_free(const cynk_proto *dev, void *ptr) {
   if (!ptr) {
     return;
   }
@@ -47,9 +47,9 @@ static void cynk_free(const cynk_device *dev, void *ptr) {
   }
 }
 
-static char *cynk_strdup(const cynk_device *dev, const char *src) {
+static char *proto_strdup(const cynk_proto *dev, const char *src) {
   size_t len = strlen(src);
-  char *dest = (char *)cynk_alloc(dev, len + 1);
+  char *dest = (char *)proto_alloc(dev, len + 1);
   if (!dest) {
     return NULL;
   }
@@ -58,7 +58,7 @@ static char *cynk_strdup(const cynk_device *dev, const char *src) {
   return dest;
 }
 
-static int cynk_topic_snprintf(char *buf, size_t cap, const char *fmt, const char *a) {
+static int proto_topic_snprintf(char *buf, size_t cap, const char *fmt, const char *a) {
   int written = snprintf(buf, cap, fmt, a);
   if (written < 0 || (size_t)written >= cap) {
     return CYNK_ERR_BUFFER;
@@ -66,8 +66,8 @@ static int cynk_topic_snprintf(char *buf, size_t cap, const char *fmt, const cha
   return CYNK_OK;
 }
 
-static int cynk_topic_snprintf2(char *buf, size_t cap, const char *fmt,
-                                const char *a, const char *b) {
+static int proto_topic_snprintf2(char *buf, size_t cap, const char *fmt,
+                                 const char *a, const char *b) {
   int written = snprintf(buf, cap, fmt, a, b);
   if (written < 0 || (size_t)written >= cap) {
     return CYNK_ERR_BUFFER;
@@ -75,7 +75,7 @@ static int cynk_topic_snprintf2(char *buf, size_t cap, const char *fmt,
   return CYNK_OK;
 }
 
-static int cynk_append(char *buf, size_t cap, size_t *pos, const char *fmt, ...) {
+static int proto_append(char *buf, size_t cap, size_t *pos, const char *fmt, ...) {
   va_list args;
   int written;
 
@@ -95,49 +95,49 @@ static int cynk_append(char *buf, size_t cap, size_t *pos, const char *fmt, ...)
   return CYNK_OK;
 }
 
-static int cynk_append_escaped(char *buf, size_t cap, size_t *pos, const char *value) {
+static int proto_append_escaped(char *buf, size_t cap, size_t *pos, const char *value) {
   const unsigned char *p = (const unsigned char *)value;
   while (*p) {
     unsigned char c = *p++;
     switch (c) {
     case '\\':
     case '"':
-      if (cynk_append(buf, cap, pos, "\\%c", c) != CYNK_OK) {
+      if (proto_append(buf, cap, pos, "\\%c", c) != CYNK_OK) {
         return CYNK_ERR_BUFFER;
       }
       break;
     case '\b':
-      if (cynk_append(buf, cap, pos, "\\b") != CYNK_OK) {
+      if (proto_append(buf, cap, pos, "\\b") != CYNK_OK) {
         return CYNK_ERR_BUFFER;
       }
       break;
     case '\f':
-      if (cynk_append(buf, cap, pos, "\\f") != CYNK_OK) {
+      if (proto_append(buf, cap, pos, "\\f") != CYNK_OK) {
         return CYNK_ERR_BUFFER;
       }
       break;
     case '\n':
-      if (cynk_append(buf, cap, pos, "\\n") != CYNK_OK) {
+      if (proto_append(buf, cap, pos, "\\n") != CYNK_OK) {
         return CYNK_ERR_BUFFER;
       }
       break;
     case '\r':
-      if (cynk_append(buf, cap, pos, "\\r") != CYNK_OK) {
+      if (proto_append(buf, cap, pos, "\\r") != CYNK_OK) {
         return CYNK_ERR_BUFFER;
       }
       break;
     case '\t':
-      if (cynk_append(buf, cap, pos, "\\t") != CYNK_OK) {
+      if (proto_append(buf, cap, pos, "\\t") != CYNK_OK) {
         return CYNK_ERR_BUFFER;
       }
       break;
     default:
       if (c < 0x20) {
-        if (cynk_append(buf, cap, pos, "\\u%04x", c) != CYNK_OK) {
+        if (proto_append(buf, cap, pos, "\\u%04x", c) != CYNK_OK) {
           return CYNK_ERR_BUFFER;
         }
       } else {
-        if (cynk_append(buf, cap, pos, "%c", c) != CYNK_OK) {
+        if (proto_append(buf, cap, pos, "%c", c) != CYNK_OK) {
           return CYNK_ERR_BUFFER;
         }
       }
@@ -147,7 +147,7 @@ static int cynk_append_escaped(char *buf, size_t cap, size_t *pos, const char *v
   return CYNK_OK;
 }
 
-static int cynk_now_iso8601(const cynk_device *dev, char *buf, size_t cap) {
+static int proto_now_iso8601(const cynk_proto *dev, char *buf, size_t cap) {
   if (!dev->cfg.now_iso8601) {
     return CYNK_ERR_TIME;
   }
@@ -157,7 +157,7 @@ static int cynk_now_iso8601(const cynk_device *dev, char *buf, size_t cap) {
   return CYNK_OK;
 }
 
-static int cynk_topic_is_command(const cynk_device *dev, const char *topic) {
+static int proto_topic_is_command(const cynk_proto *dev, const char *topic) {
   const char *prefix = "cynk/v1/";
   size_t prefix_len = strlen(prefix);
   size_t topic_len = strlen(topic);
@@ -190,13 +190,13 @@ static int cynk_topic_is_command(const cynk_device *dev, const char *topic) {
   return 1;
 }
 
-static int cynk_json_eq(const char *json, const jsmntok_t *tok, const char *s) {
+static int proto_json_eq(const char *json, const jsmntok_t *tok, const char *s) {
   size_t len = (size_t)(tok->end - tok->start);
   return tok->type == JSMN_STRING && strlen(s) == len &&
          strncmp(json + tok->start, s, len) == 0;
 }
 
-static int cynk_json_skip(const jsmntok_t *toks, int index) {
+static int proto_json_skip(const jsmntok_t *toks, int index) {
   int i = index;
   int count = 1;
 
@@ -218,8 +218,8 @@ static int cynk_json_skip(const jsmntok_t *toks, int index) {
   return i;
 }
 
-static int cynk_json_find_key(const char *json, const jsmntok_t *toks, int obj_index,
-                              const char *key) {
+static int proto_json_find_key(const char *json, const jsmntok_t *toks, int obj_index,
+                               const char *key) {
   int pairs;
   int i;
   int p;
@@ -235,20 +235,20 @@ static int cynk_json_find_key(const char *json, const jsmntok_t *toks, int obj_i
     int key_index = i;
     int val_index = i + 1;
 
-    if (cynk_json_eq(json, &toks[key_index], key)) {
+    if (proto_json_eq(json, &toks[key_index], key)) {
       return val_index;
     }
 
-    i = cynk_json_skip(toks, val_index);
+    i = proto_json_skip(toks, val_index);
   }
 
   return -1;
 }
 
-static char *cynk_json_strdup(const cynk_device *dev, const char *json,
-                              const jsmntok_t *tok) {
+static char *proto_json_strdup(const cynk_proto *dev, const char *json,
+                               const jsmntok_t *tok) {
   size_t len = (size_t)(tok->end - tok->start);
-  char *out = (char *)cynk_alloc(dev, len + 1);
+  char *out = (char *)proto_alloc(dev, len + 1);
 
   if (!out) {
     return NULL;
@@ -259,7 +259,7 @@ static char *cynk_json_strdup(const cynk_device *dev, const char *json,
   return out;
 }
 
-static int cynk_parse_status_ack(cynk_device *dev, const char *json, size_t len) {
+static int proto_parse_status_ack(cynk_proto *dev, const char *json, size_t len) {
   jsmn_parser parser;
   jsmntok_t *tokens;
   int token_count;
@@ -268,7 +268,7 @@ static int cynk_parse_status_ack(cynk_device *dev, const char *json, size_t len)
   int telemetry_index;
   char *user_id;
 
-  tokens = (jsmntok_t *)cynk_alloc(dev, sizeof(jsmntok_t) * CYNK_JSON_TOKENS);
+  tokens = (jsmntok_t *)proto_alloc(dev, sizeof(jsmntok_t) * CYNK_JSON_TOKENS);
   if (!tokens) {
     return CYNK_ERR_NO_MEMORY;
   }
@@ -276,32 +276,32 @@ static int cynk_parse_status_ack(cynk_device *dev, const char *json, size_t len)
   jsmn_init(&parser);
   token_count = jsmn_parse(&parser, json, len, tokens, CYNK_JSON_TOKENS);
   if (token_count < 0) {
-    cynk_free(dev, tokens);
+    proto_free(dev, tokens);
     return CYNK_ERR_JSON;
   }
 
-  user_index = cynk_json_find_key(json, tokens, 0, "user_id");
+  user_index = proto_json_find_key(json, tokens, 0, "user_id");
   if (user_index < 0 || tokens[user_index].type != JSMN_STRING) {
-    cynk_free(dev, tokens);
+    proto_free(dev, tokens);
     return CYNK_ERR_JSON;
   }
 
-  user_id = cynk_json_strdup(dev, json, &tokens[user_index]);
+  user_id = proto_json_strdup(dev, json, &tokens[user_index]);
   if (!user_id) {
-    cynk_free(dev, tokens);
+    proto_free(dev, tokens);
     return CYNK_ERR_NO_MEMORY;
   }
 
   if (dev->user_id) {
-    cynk_free(dev, dev->user_id);
+    proto_free(dev, dev->user_id);
   }
 
   dev->user_id = user_id;
   dev->telemetry_topic_set = 0;
 
-  topics_index = cynk_json_find_key(json, tokens, 0, "topics");
+  topics_index = proto_json_find_key(json, tokens, 0, "topics");
   if (topics_index >= 0 && tokens[topics_index].type == JSMN_OBJECT) {
-    telemetry_index = cynk_json_find_key(json, tokens, topics_index, "telemetry");
+    telemetry_index = proto_json_find_key(json, tokens, topics_index, "telemetry");
     if (telemetry_index >= 0 && tokens[telemetry_index].type == JSMN_STRING) {
       size_t tlen = (size_t)(tokens[telemetry_index].end - tokens[telemetry_index].start);
       if (tlen < sizeof(dev->telemetry_topic)) {
@@ -320,11 +320,11 @@ static int cynk_parse_status_ack(cynk_device *dev, const char *json, size_t len)
     dev->handshake_cb(dev->handshake_ctx, dev->user_id);
   }
 
-  cynk_free(dev, tokens);
+  proto_free(dev, tokens);
   return CYNK_OK;
 }
 
-static int cynk_parse_command(cynk_device *dev, const char *json, size_t len) {
+static int proto_parse_command(cynk_proto *dev, const char *json, size_t len) {
   jsmn_parser parser;
   jsmntok_t *tokens;
   int token_count;
@@ -339,7 +339,7 @@ static int cynk_parse_command(cynk_device *dev, const char *json, size_t len) {
 
   memset(&cmd, 0, sizeof(cmd));
 
-  tokens = (jsmntok_t *)cynk_alloc(dev, sizeof(jsmntok_t) * CYNK_JSON_TOKENS);
+  tokens = (jsmntok_t *)proto_alloc(dev, sizeof(jsmntok_t) * CYNK_JSON_TOKENS);
   if (!tokens) {
     return CYNK_ERR_NO_MEMORY;
   }
@@ -351,41 +351,41 @@ static int cynk_parse_command(cynk_device *dev, const char *json, size_t len) {
     goto cleanup;
   }
 
-  command_index = cynk_json_find_key(json, tokens, 0, "command");
+  command_index = proto_json_find_key(json, tokens, 0, "command");
   if (command_index < 0 || tokens[command_index].type != JSMN_STRING) {
     rc = CYNK_ERR_JSON;
     goto cleanup;
   }
 
-  cmd.command = cynk_json_strdup(dev, json, &tokens[command_index]);
+  cmd.command = proto_json_strdup(dev, json, &tokens[command_index]);
   if (!cmd.command) {
     rc = CYNK_ERR_NO_MEMORY;
     goto cleanup;
   }
 
-  request_index = cynk_json_find_key(json, tokens, 0, "request_id");
+  request_index = proto_json_find_key(json, tokens, 0, "request_id");
   if (request_index >= 0 && tokens[request_index].type == JSMN_STRING) {
-    cmd.request_id = cynk_json_strdup(dev, json, &tokens[request_index]);
+    cmd.request_id = proto_json_strdup(dev, json, &tokens[request_index]);
     if (!cmd.request_id) {
       rc = CYNK_ERR_NO_MEMORY;
       goto cleanup;
     }
   }
 
-  widget_index = cynk_json_find_key(json, tokens, 0, "widget");
+  widget_index = proto_json_find_key(json, tokens, 0, "widget");
   if (widget_index >= 0 && tokens[widget_index].type == JSMN_OBJECT) {
-    slug_index = cynk_json_find_key(json, tokens, widget_index, "slug");
+    slug_index = proto_json_find_key(json, tokens, widget_index, "slug");
     if (slug_index >= 0 && tokens[slug_index].type == JSMN_STRING) {
-      cmd.widget.slug = cynk_json_strdup(dev, json, &tokens[slug_index]);
+      cmd.widget.slug = proto_json_strdup(dev, json, &tokens[slug_index]);
       if (!cmd.widget.slug) {
         rc = CYNK_ERR_NO_MEMORY;
         goto cleanup;
       }
     }
 
-    id_index = cynk_json_find_key(json, tokens, widget_index, "id");
+    id_index = proto_json_find_key(json, tokens, widget_index, "id");
     if (id_index >= 0 && tokens[id_index].type == JSMN_STRING) {
-      cmd.widget.id = cynk_json_strdup(dev, json, &tokens[id_index]);
+      cmd.widget.id = proto_json_strdup(dev, json, &tokens[id_index]);
       if (!cmd.widget.id) {
         rc = CYNK_ERR_NO_MEMORY;
         goto cleanup;
@@ -393,9 +393,9 @@ static int cynk_parse_command(cynk_device *dev, const char *json, size_t len) {
     }
   }
 
-  params_index = cynk_json_find_key(json, tokens, 0, "params");
+  params_index = proto_json_find_key(json, tokens, 0, "params");
   if (params_index >= 0) {
-    cmd.params_json = cynk_json_strdup(dev, json, &tokens[params_index]);
+    cmd.params_json = proto_json_strdup(dev, json, &tokens[params_index]);
     if (!cmd.params_json) {
       rc = CYNK_ERR_NO_MEMORY;
       goto cleanup;
@@ -408,26 +408,26 @@ static int cynk_parse_command(cynk_device *dev, const char *json, size_t len) {
 
 cleanup:
   if (cmd.params_json) {
-    cynk_free(dev, (char *)cmd.params_json);
+    proto_free(dev, (char *)cmd.params_json);
   }
   if (cmd.widget.slug) {
-    cynk_free(dev, (char *)cmd.widget.slug);
+    proto_free(dev, (char *)cmd.widget.slug);
   }
   if (cmd.widget.id) {
-    cynk_free(dev, (char *)cmd.widget.id);
+    proto_free(dev, (char *)cmd.widget.id);
   }
   if (cmd.request_id) {
-    cynk_free(dev, (char *)cmd.request_id);
+    proto_free(dev, (char *)cmd.request_id);
   }
   if (cmd.command) {
-    cynk_free(dev, (char *)cmd.command);
+    proto_free(dev, (char *)cmd.command);
   }
-  cynk_free(dev, tokens);
+  proto_free(dev, tokens);
 
   return rc;
 }
 
-static int cynk_telemetry_topic(const cynk_device *dev, char *buf, size_t cap) {
+static int proto_telemetry_topic(const cynk_proto *dev, char *buf, size_t cap) {
   if (dev->telemetry_topic_set) {
     size_t len = strlen(dev->telemetry_topic);
     if (len >= cap) {
@@ -441,13 +441,13 @@ static int cynk_telemetry_topic(const cynk_device *dev, char *buf, size_t cap) {
     return CYNK_ERR_NO_HANDSHAKE;
   }
 
-  return cynk_topic_snprintf2(buf, cap, "cynk/v1/%s/%s/telemetry", dev->user_id,
-                              dev->device_id);
+  return proto_topic_snprintf2(buf, cap, "cynk/v1/%s/%s/telemetry", dev->user_id,
+                               dev->device_id);
 }
 
-cynk_device *cynk_device_create(const cynk_device_config *cfg,
-                                const cynk_transport *tx) {
-  cynk_device *dev;
+cynk_proto *cynk_proto_create(const cynk_proto_config *cfg,
+                              const cynk_transport *tx) {
+  cynk_proto *dev;
 
   if (!cfg || !tx || !tx->publish || !tx->subscribe || !cfg->device_id ||
       !cfg->now_ms || !cfg->now_iso8601) {
@@ -457,7 +457,7 @@ cynk_device *cynk_device_create(const cynk_device_config *cfg,
     return NULL;
   }
 
-  dev = (cynk_device *)(cfg->alloc ? cfg->alloc(sizeof(*dev)) : malloc(sizeof(*dev)));
+  dev = (cynk_proto *)(cfg->alloc ? cfg->alloc(sizeof(*dev)) : malloc(sizeof(*dev)));
   if (!dev) {
     return NULL;
   }
@@ -471,48 +471,48 @@ cynk_device *cynk_device_create(const cynk_device_config *cfg,
   dev->cfg.handshake_timeout_ms = cfg->handshake_timeout_ms > 0 ?
                                   cfg->handshake_timeout_ms : 5000;
 
-  dev->device_id = cynk_strdup(dev, cfg->device_id);
+  dev->device_id = proto_strdup(dev, cfg->device_id);
   if (!dev->device_id) {
-    cynk_device_destroy(dev);
+    cynk_proto_destroy(dev);
     return NULL;
   }
 
-  if (cynk_topic_snprintf(dev->status_topic, sizeof(dev->status_topic),
-                          "cynk/v1/status/%s", dev->device_id) != CYNK_OK) {
-    cynk_device_destroy(dev);
+  if (proto_topic_snprintf(dev->status_topic, sizeof(dev->status_topic),
+                           "cynk/v1/status/%s", dev->device_id) != CYNK_OK) {
+    cynk_proto_destroy(dev);
     return NULL;
   }
 
-  if (cynk_topic_snprintf(dev->status_ack_topic, sizeof(dev->status_ack_topic),
-                          "cynk/v1/status/%s/ack", dev->device_id) != CYNK_OK) {
-    cynk_device_destroy(dev);
+  if (proto_topic_snprintf(dev->status_ack_topic, sizeof(dev->status_ack_topic),
+                           "cynk/v1/status/%s/ack", dev->device_id) != CYNK_OK) {
+    cynk_proto_destroy(dev);
     return NULL;
   }
 
-  if (cynk_topic_snprintf(dev->command_topic_wildcard,
-                          sizeof(dev->command_topic_wildcard),
-                          "cynk/v1/+/%s/command", dev->device_id) != CYNK_OK) {
-    cynk_device_destroy(dev);
+  if (proto_topic_snprintf(dev->command_topic_wildcard,
+                           sizeof(dev->command_topic_wildcard),
+                           "cynk/v1/+/%s/command", dev->device_id) != CYNK_OK) {
+    cynk_proto_destroy(dev);
     return NULL;
   }
 
   return dev;
 }
 
-void cynk_device_destroy(cynk_device *dev) {
+void cynk_proto_destroy(cynk_proto *dev) {
   if (!dev) {
     return;
   }
   if (dev->device_id) {
-    cynk_free(dev, dev->device_id);
+    proto_free(dev, dev->device_id);
   }
   if (dev->user_id) {
-    cynk_free(dev, dev->user_id);
+    proto_free(dev, dev->user_id);
   }
-  cynk_free(dev, dev);
+  proto_free(dev, dev);
 }
 
-int cynk_device_on_connect(cynk_device *dev) {
+int cynk_proto_on_connect(cynk_proto *dev) {
   char payload[CYNK_STATUS_PAYLOAD_MAX];
   int rc;
 
@@ -530,7 +530,7 @@ int cynk_device_on_connect(cynk_device *dev) {
     return CYNK_ERR_SUBSCRIBE;
   }
 
-  rc = cynk_build_status_payload(dev, "online", payload, sizeof(payload));
+  rc = cynk_proto_build_status_payload(dev, "online", payload, sizeof(payload));
   if (rc != CYNK_OK) {
     return rc;
   }
@@ -549,8 +549,8 @@ int cynk_device_on_connect(cynk_device *dev) {
   return CYNK_OK;
 }
 
-int cynk_device_handle_message(cynk_device *dev, const char *topic,
-                               const void *payload, size_t len) {
+int cynk_proto_handle_message(cynk_proto *dev, const char *topic,
+                              const void *payload, size_t len) {
   const char *json = (const char *)payload;
 
   if (!dev || !topic || !payload) {
@@ -558,12 +558,12 @@ int cynk_device_handle_message(cynk_device *dev, const char *topic,
   }
 
   if (strcmp(topic, dev->status_ack_topic) == 0) {
-    return cynk_parse_status_ack(dev, json, len);
+    return proto_parse_status_ack(dev, json, len);
   }
 
-  if (cynk_topic_is_command(dev, topic)) {
+  if (proto_topic_is_command(dev, topic)) {
     if (dev->command_cb) {
-      return cynk_parse_command(dev, json, len);
+      return proto_parse_command(dev, json, len);
     }
     return CYNK_OK;
   }
@@ -571,7 +571,7 @@ int cynk_device_handle_message(cynk_device *dev, const char *topic,
   return CYNK_OK;
 }
 
-int cynk_device_poll(cynk_device *dev) {
+int cynk_proto_poll(cynk_proto *dev) {
   uint64_t now;
 
   if (!dev) {
@@ -592,15 +592,15 @@ int cynk_device_poll(cynk_device *dev) {
   return CYNK_OK;
 }
 
-int cynk_device_handshake_ready(const cynk_device *dev) {
+int cynk_proto_handshake_ready(const cynk_proto *dev) {
   return dev && dev->handshake_ready;
 }
 
-const char *cynk_device_user_id(const cynk_device *dev) {
+const char *cynk_proto_user_id(const cynk_proto *dev) {
   return dev ? dev->user_id : NULL;
 }
 
-void cynk_device_set_command_cb(cynk_device *dev, cynk_command_cb cb, void *ctx) {
+void cynk_proto_set_command_cb(cynk_proto *dev, cynk_command_cb cb, void *ctx) {
   if (!dev) {
     return;
   }
@@ -608,7 +608,7 @@ void cynk_device_set_command_cb(cynk_device *dev, cynk_command_cb cb, void *ctx)
   dev->command_ctx = ctx;
 }
 
-void cynk_device_set_handshake_cb(cynk_device *dev, cynk_handshake_cb cb, void *ctx) {
+void cynk_proto_set_handshake_cb(cynk_proto *dev, cynk_handshake_cb cb, void *ctx) {
   if (!dev) {
     return;
   }
@@ -616,7 +616,7 @@ void cynk_device_set_handshake_cb(cynk_device *dev, cynk_handshake_cb cb, void *
   dev->handshake_ctx = ctx;
 }
 
-int cynk_device_send_value(cynk_device *dev, cynk_widget_ref ref, cynk_value value) {
+int cynk_proto_send_value(cynk_proto *dev, cynk_widget_ref ref, cynk_value value) {
   char ts[CYNK_TS_MAX];
   char topic[CYNK_TOPIC_MAX];
   char *payload;
@@ -632,12 +632,12 @@ int cynk_device_send_value(cynk_device *dev, cynk_widget_ref ref, cynk_value val
     return CYNK_ERR_INVALID_ARG;
   }
 
-  rc = cynk_now_iso8601(dev, ts, sizeof(ts));
+  rc = proto_now_iso8601(dev, ts, sizeof(ts));
   if (rc != CYNK_OK) {
     return rc;
   }
 
-  rc = cynk_telemetry_topic(dev, topic, sizeof(topic));
+  rc = proto_telemetry_topic(dev, topic, sizeof(topic));
   if (rc != CYNK_OK) {
     return rc;
   }
@@ -655,74 +655,74 @@ int cynk_device_send_value(cynk_device *dev, cynk_widget_ref ref, cynk_value val
     payload_cap += strlen(value.json);
   }
 
-  payload = (char *)cynk_alloc(dev, payload_cap);
+  payload = (char *)proto_alloc(dev, payload_cap);
   if (!payload) {
     return CYNK_ERR_NO_MEMORY;
   }
 
-  rc = cynk_append(payload, payload_cap, &pos, "{\"ts\":\"");
+  rc = proto_append(payload, payload_cap, &pos, "{\"ts\":\"");
   if (rc == CYNK_OK) {
-    rc = cynk_append_escaped(payload, payload_cap, &pos, ts);
+    rc = proto_append_escaped(payload, payload_cap, &pos, ts);
   }
   if (rc == CYNK_OK) {
-    rc = cynk_append(payload, payload_cap, &pos, "\",\"widgets\":[{");
+    rc = proto_append(payload, payload_cap, &pos, "\",\"widgets\":[{");
   }
 
   if (rc == CYNK_OK && ref.id) {
-    rc = cynk_append(payload, payload_cap, &pos, "\"id\":\"");
+    rc = proto_append(payload, payload_cap, &pos, "\"id\":\"");
     if (rc == CYNK_OK) {
-      rc = cynk_append_escaped(payload, payload_cap, &pos, ref.id);
+      rc = proto_append_escaped(payload, payload_cap, &pos, ref.id);
     }
     if (rc == CYNK_OK) {
-      rc = cynk_append(payload, payload_cap, &pos, "\"");
+      rc = proto_append(payload, payload_cap, &pos, "\"");
     }
     first_field = 0;
   }
 
   if (rc == CYNK_OK && ref.slug) {
     if (!first_field) {
-      rc = cynk_append(payload, payload_cap, &pos, ",");
+      rc = proto_append(payload, payload_cap, &pos, ",");
     }
     if (rc == CYNK_OK) {
-      rc = cynk_append(payload, payload_cap, &pos, "\"slug\":\"");
+      rc = proto_append(payload, payload_cap, &pos, "\"slug\":\"");
     }
     if (rc == CYNK_OK) {
-      rc = cynk_append_escaped(payload, payload_cap, &pos, ref.slug);
+      rc = proto_append_escaped(payload, payload_cap, &pos, ref.slug);
     }
     if (rc == CYNK_OK) {
-      rc = cynk_append(payload, payload_cap, &pos, "\"");
+      rc = proto_append(payload, payload_cap, &pos, "\"");
     }
     first_field = 0;
   }
 
   if (rc == CYNK_OK) {
     if (!first_field) {
-      rc = cynk_append(payload, payload_cap, &pos, ",");
+      rc = proto_append(payload, payload_cap, &pos, ",");
     }
   }
   if (rc == CYNK_OK) {
-    rc = cynk_append(payload, payload_cap, &pos, "\"payload\":{\"value\":");
+    rc = proto_append(payload, payload_cap, &pos, "\"payload\":{\"value\":");
   }
 
   if (rc == CYNK_OK) {
     switch (value.type) {
     case CYNK_VALUE_NUMBER:
-      rc = cynk_append(payload, payload_cap, &pos, "%.17g", value.number);
+      rc = proto_append(payload, payload_cap, &pos, "%.17g", value.number);
       break;
     case CYNK_VALUE_BOOL:
-      rc = cynk_append(payload, payload_cap, &pos, value.boolean ? "true" : "false");
+      rc = proto_append(payload, payload_cap, &pos, value.boolean ? "true" : "false");
       break;
     case CYNK_VALUE_STRING:
       if (!value.string) {
         rc = CYNK_ERR_INVALID_ARG;
         break;
       }
-      rc = cynk_append(payload, payload_cap, &pos, "\"");
+      rc = proto_append(payload, payload_cap, &pos, "\"");
       if (rc == CYNK_OK) {
-        rc = cynk_append_escaped(payload, payload_cap, &pos, value.string);
+        rc = proto_append_escaped(payload, payload_cap, &pos, value.string);
       }
       if (rc == CYNK_OK) {
-        rc = cynk_append(payload, payload_cap, &pos, "\"");
+        rc = proto_append(payload, payload_cap, &pos, "\"");
       }
       break;
     case CYNK_VALUE_JSON:
@@ -730,7 +730,7 @@ int cynk_device_send_value(cynk_device *dev, cynk_widget_ref ref, cynk_value val
         rc = CYNK_ERR_INVALID_ARG;
         break;
       }
-      rc = cynk_append(payload, payload_cap, &pos, "%s", value.json);
+      rc = proto_append(payload, payload_cap, &pos, "%s", value.json);
       break;
     default:
       rc = CYNK_ERR_INVALID_ARG;
@@ -739,7 +739,7 @@ int cynk_device_send_value(cynk_device *dev, cynk_widget_ref ref, cynk_value val
   }
 
   if (rc == CYNK_OK) {
-    rc = cynk_append(payload, payload_cap, &pos, "}}]}");
+    rc = proto_append(payload, payload_cap, &pos, "}}]}");
   }
 
   if (rc == CYNK_OK) {
@@ -751,11 +751,11 @@ int cynk_device_send_value(cynk_device *dev, cynk_widget_ref ref, cynk_value val
     }
   }
 
-  cynk_free(dev, payload);
+  proto_free(dev, payload);
   return rc;
 }
 
-int cynk_device_send_raw(cynk_device *dev, const char *telemetry_json, size_t len) {
+int cynk_proto_send_raw(cynk_proto *dev, const char *telemetry_json, size_t len) {
   char topic[CYNK_TOPIC_MAX];
   int rc;
 
@@ -763,7 +763,7 @@ int cynk_device_send_raw(cynk_device *dev, const char *telemetry_json, size_t le
     return CYNK_ERR_INVALID_ARG;
   }
 
-  rc = cynk_telemetry_topic(dev, topic, sizeof(topic));
+  rc = proto_telemetry_topic(dev, topic, sizeof(topic));
   if (rc != CYNK_OK) {
     return rc;
   }
@@ -776,20 +776,20 @@ int cynk_device_send_raw(cynk_device *dev, const char *telemetry_json, size_t le
   return CYNK_OK;
 }
 
-const char *cynk_device_status_topic(const cynk_device *dev) {
+const char *cynk_proto_status_topic(const cynk_proto *dev) {
   return dev ? dev->status_topic : NULL;
 }
 
-const char *cynk_device_status_ack_topic(const cynk_device *dev) {
+const char *cynk_proto_status_ack_topic(const cynk_proto *dev) {
   return dev ? dev->status_ack_topic : NULL;
 }
 
-const char *cynk_device_command_topic_wildcard(const cynk_device *dev) {
+const char *cynk_proto_command_topic_wildcard(const cynk_proto *dev) {
   return dev ? dev->command_topic_wildcard : NULL;
 }
 
-int cynk_build_status_payload(const cynk_device *dev, const char *status,
-                              char *buf, size_t cap) {
+int cynk_proto_build_status_payload(const cynk_proto *dev, const char *status,
+                                    char *buf, size_t cap) {
   char ts[CYNK_TS_MAX];
   size_t pos = 0;
   int rc;
@@ -798,29 +798,29 @@ int cynk_build_status_payload(const cynk_device *dev, const char *status,
     return CYNK_ERR_INVALID_ARG;
   }
 
-  rc = cynk_now_iso8601(dev, ts, sizeof(ts));
+  rc = proto_now_iso8601(dev, ts, sizeof(ts));
   if (rc != CYNK_OK) {
     return rc;
   }
 
-  rc = cynk_append(buf, cap, &pos, "{\"status\":\"");
+  rc = proto_append(buf, cap, &pos, "{\"status\":\"");
   if (rc == CYNK_OK) {
-    rc = cynk_append_escaped(buf, cap, &pos, status);
+    rc = proto_append_escaped(buf, cap, &pos, status);
   }
   if (rc == CYNK_OK) {
-    rc = cynk_append(buf, cap, &pos, "\",\"device_id\":\"");
+    rc = proto_append(buf, cap, &pos, "\",\"device_id\":\"");
   }
   if (rc == CYNK_OK) {
-    rc = cynk_append_escaped(buf, cap, &pos, dev->device_id);
+    rc = proto_append_escaped(buf, cap, &pos, dev->device_id);
   }
   if (rc == CYNK_OK) {
-    rc = cynk_append(buf, cap, &pos, "\",\"ts\":\"");
+    rc = proto_append(buf, cap, &pos, "\",\"ts\":\"");
   }
   if (rc == CYNK_OK) {
-    rc = cynk_append_escaped(buf, cap, &pos, ts);
+    rc = proto_append_escaped(buf, cap, &pos, ts);
   }
   if (rc == CYNK_OK) {
-    rc = cynk_append(buf, cap, &pos, "\"}");
+    rc = proto_append(buf, cap, &pos, "\"}");
   }
 
   return rc;

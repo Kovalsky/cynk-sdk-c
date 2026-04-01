@@ -1,4 +1,8 @@
-#include "cynk_device.h"
+/*
+ * Protocol-level example using the internal API directly.
+ * Most users should use cynk.h instead — see examples/quick_start.c (CYN-36).
+ */
+#include "internal/cynk_protocol.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -40,7 +44,7 @@ static void example_command(void *ctx, const cynk_command *cmd) {
 }
 
 int main(void) {
-  cynk_device_config cfg = {
+  cynk_proto_config cfg = {
     .device_id = "device-123",
     .handshake_timeout_ms = 5000,
     .qos = 1,
@@ -57,23 +61,23 @@ int main(void) {
     .ctx = NULL
   };
 
-  cynk_device *dev = cynk_device_create(&cfg, &tx);
+  cynk_proto *dev = cynk_proto_create(&cfg, &tx);
   if (!dev) {
     printf("failed to create device\n");
     return 1;
   }
 
-  cynk_device_set_command_cb(dev, example_command, NULL);
+  cynk_proto_set_command_cb(dev, example_command, NULL);
 
   char lwt_payload[160];
-  if (cynk_build_status_payload(dev, "offline", lwt_payload, sizeof(lwt_payload)) != CYNK_OK) {
+  if (cynk_proto_build_status_payload(dev, "offline", lwt_payload, sizeof(lwt_payload)) != CYNK_OK) {
     printf("failed to build lwt payload\n");
     return 1;
   }
 
-  printf("set LWT topic=%s payload=%s\n", cynk_device_status_topic(dev), lwt_payload);
+  printf("set LWT topic=%s payload=%s\n", cynk_proto_status_topic(dev), lwt_payload);
 
-  if (cynk_device_on_connect(dev) != CYNK_OK) {
+  if (cynk_proto_on_connect(dev) != CYNK_OK) {
     printf("handshake start failed\n");
     return 1;
   }
@@ -83,12 +87,12 @@ int main(void) {
     "\"device_id\":\"device-123\",\"ts\":\"2025-01-01T00:00:00Z\","
     "\"topics\":{\"telemetry\":\"cynk/v1/user-1/device-123/telemetry\"}}";
 
-  cynk_device_handle_message(dev, cynk_device_status_ack_topic(dev), ack, strlen(ack));
+  cynk_proto_handle_message(dev, cynk_proto_status_ack_topic(dev), ack, strlen(ack));
 
   cynk_widget_ref ref = { .id = NULL, .slug = "slider-1" };
   cynk_value value = { .type = CYNK_VALUE_NUMBER, .number = 10.5 };
-  cynk_device_send_value(dev, ref, value);
+  cynk_proto_send_value(dev, ref, value);
 
-  cynk_device_destroy(dev);
+  cynk_proto_destroy(dev);
   return 0;
 }
